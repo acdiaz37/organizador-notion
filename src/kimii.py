@@ -12,32 +12,27 @@ from src.models import PaymentData
 
 logger = logging.getLogger(__name__)
 
-PROMPT_TEMPLATE = """Analiza la siguiente captura de pantalla de un pago y extrae la información en formato JSON.
+PROMPT_TEMPLATE = """Analiza la captura de pantalla de un pago y devuelve **únicamente** un objeto JSON válido, sin texto extra, sin markdown, sin explicaciones.
 
 {context_block}
 
-Devuelve **únicamente** un objeto JSON válido, sin texto adicional, sin markdown, sin explicaciones.
-
-El JSON debe tener esta estructura exacta:
+Estructura exacta (valores desconocidos = null):
 {{
-  "nombre": "descripción corta del pago",
+  "nombre": "descripción corta",
   "monto": 45000,
   "fecha": "2026-07-01",
-  "comercio": "nombre del comercio o destinatario",
+  "comercio": "comercio o destinatario",
   "categoria": "una de: Alimentación, Transporte, Servicios, Entretenimiento, Salud, Hogar, Otros",
-  "referencia": "número de referencia o transacción si aparece",
-  "estado": "una de: Exitoso, Pendiente, Rechazado, Desconocido",
-  "notas": "cualquier información adicional relevante"
+  "referencia": "número de referencia",
+  "estado": "Exitoso, Pendiente, Rechazado o Desconocido",
+  "notas": "detalles breves"
 }}
 
 Reglas:
-- "monto" debe ser un número, sin símbolos de moneda ni puntos de miles. Ej: 45000, 1250000.5
-- "fecha" debe estar en formato ISO 8601 (YYYY-MM-DD). Si no hay año visible, asume el año actual.
-- Si algún dato no aparece en la imagen, usa null para campos opcionales.
-- Para "categoria", elige la opción más cercana. Si no estás seguro, usa "Otros".
-- Para "estado", si no aparece información de estado, usa "Exitoso" si parece un comprobante de pago, o "Desconocido" si no puedes determinarlo.
-- En "notas" puedes incluir texto extraído o detalles como "tarjeta terminada en 1234", "propina incluida", etc.
-"""
+- "monto": número limpio, sin símbolos ni puntos de miles. Si ves $27.616,83 escribe 27616.83.
+- "fecha": ISO 8601 (YYYY-MM-DD). Sin año visible: usa 2026.
+- "estado": default "Exitoso" si es un comprobante.
+- Sé breve en "nombre" y "notas"."""
 
 CONTEXT_PREFIX = "El usuario envió este mensaje de contexto junto con la imagen. Úsalo para completar o corregir la información del pago:\n"""
 
@@ -99,11 +94,11 @@ class KimiExtractor:
                 }
             ],
             temperature=self.temperature,
-            max_completion_tokens=1024,
+            max_completion_tokens=2048,
         )
 
         raw = response.choices[0].message.content or "{}"
-        logger.debug("Raw Kimi response: %s", raw)
+        logger.info("Raw Kimi response (%d chars): %s", len(raw), raw[:500])
 
         # Sometimes Kimi wraps JSON in markdown code blocks; strip them.
         cleaned = raw.strip()
@@ -111,17 +106,70 @@ class KimiExtractor:
             cleaned = "\n".join(cleaned.split("\n")[1:])
             cleaned = cleaned.rstrip("`").strip()
 
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            logger.error("Failed to parse Kimi response as JSON: %s", raw)
-            raise ValueError(f"Kimi response is not valid JSON: {exc}") from exc
+        data = self._parse_json(cleaned)
 
         # Normalize keys: replace spaces or missing keys.
         data.setdefault("nombre", "Pago registrado")
         data.setdefault("monto", 0)
 
         return PaymentData.model_validate(data)
+
+    def _parse_json(self, text: str) -> dict:
+        """Parse JSON, trying a few recovery strategies if needed."""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Try extracting the first {...} block.
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+
+        # Try to repair truncated JSON by closing strings and braces.
+        repaired = self._repair_truncated_json(text[start : end + 1] if start != -1 and end != -1 else text)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as exc:
+            logger.error("Failed to parse Kimi response as JSON: %s", text)
+            raise ValueError(f"Kimi response is not valid JSON: {exc}") from exc
+
+    @staticmethod
+    def _repair_truncated_json(text: str) -> str:
+        """Best-effort repair for JSON cut off mid-string."""
+        text = text.strip()
+
+        # Close unterminated strings.
+        in_string = False
+        escape = False
+        for ch in text:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+
+        if in_string:
+            text += '"'
+
+        # Close open braces/brackets.
+        open_braces = text.count("{") - text.count("}")
+        open_brackets = text.count("[") - text.count("]")
+        text += "}" * max(open_braces, 0)
+        text += "]" * max(open_brackets, 0)
+
+        # Remove trailing comma before closing brace if present.
+        if text.endswith(',}'):
+            text = text[:-2] + '}'
+
+        return text
 
     def test_connection(self) -> str:
         """Quickly test that the API key works."""
