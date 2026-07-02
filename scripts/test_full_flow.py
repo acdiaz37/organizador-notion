@@ -76,7 +76,7 @@ def main() -> None:
         logger.info("Extracted: %s", payment.model_dump_json(indent=2))
 
         logger.info("Saving to Notion...")
-        page_id, page_url = save_payment(payment, image_path)
+        page_id, page_url = save_payment(payment, image_url=None)
         logger.info("Page created: %s", page_url)
 
         print(f"\n✅ Flujo completo funcionó")

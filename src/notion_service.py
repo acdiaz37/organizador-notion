@@ -1,6 +1,5 @@
 """Notion service: create databases and pages."""
 import logging
-import mimetypes
 from pathlib import Path
 from typing import Optional
 
@@ -13,25 +12,6 @@ from src.models import PaymentData
 logger = logging.getLogger(__name__)
 
 DATABASE_TITLE = "Registro de Pagos"
-
-# https://catbox.moe FAQ; no API key required for anonymous uploads.
-CATBOX_UPLOAD_URL = "https://catbox.moe/user/api.php"
-
-
-def upload_image_to_catbox(image_path: Path) -> str:
-    """Upload a local image to catbox and return a permanent public URL."""
-    logger.info("Uploading image to catbox: %s", image_path)
-    with open(image_path, "rb") as f:
-        files = {"fileToUpload": f}
-        data = {"reqtype": "fileupload"}
-        response = httpx.post(CATBOX_UPLOAD_URL, data=data, files=files, timeout=60.0)
-    response.raise_for_status()
-    url = response.text.strip()
-    if not url.startswith("http"):
-        raise ValueError(f"Unexpected catbox response: {url}")
-    logger.info("Image uploaded to: %s", url)
-    return url
-
 
 # Use the 2022-06-28 API version because newer versions create databases as
 # data sources without direct properties, breaking page creation.
@@ -171,10 +151,10 @@ class NotionService:
 
 def save_payment(
     payment: PaymentData,
-    image_path: Path,
+    image_url: Optional[str],
     database_id: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Upload image and create a Notion page. Returns (page_id, page_url)."""
+    """Create a Notion page. image_url is optional. Returns (page_id, page_url)."""
     service = NotionService()
 
     if database_id is None:
@@ -183,7 +163,6 @@ def save_payment(
     if not database_id:
         raise ValueError("No Notion database ID configured or found.")
 
-    image_url = upload_image_to_catbox(image_path)
     page_id = service.create_payment_page(database_id, payment, image_url)
     page_url = f"https://notion.so/{page_id.replace('-', '')}"
     return page_id, page_url
