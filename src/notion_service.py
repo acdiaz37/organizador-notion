@@ -17,6 +17,27 @@ DATABASE_TITLE = "Registro de Pagos"
 # data sources without direct properties, breaking page creation.
 NOTION_API_VERSION = "2022-06-28"
 
+# Freeimage.host anonymous upload endpoint.
+FREEIMAGE_UPLOAD_URL = "https://freeimage.host/json"
+
+
+def upload_image_to_freeimage(image_path: Path) -> str:
+    """Upload a local image to freeimage.host and return a public URL."""
+    logger.info("Uploading image to freeimage.host: %s", image_path)
+    with open(image_path, "rb") as f:
+        files = {"source": f}
+        data = {"type": "file", "action": "upload"}
+        response = httpx.post(FREEIMAGE_UPLOAD_URL, data=data, files=files, timeout=60.0)
+    response.raise_for_status()
+
+    result = response.json()
+    if result.get("status_code") != 200:
+        raise ValueError(f"freeimage.host upload failed: {result}")
+
+    image_url = result["image"]["url"]
+    logger.info("Image uploaded to: %s", image_url)
+    return image_url
+
 
 class NotionService:
     """Wrapper around the Notion API."""
@@ -151,10 +172,10 @@ class NotionService:
 
 def save_payment(
     payment: PaymentData,
-    image_url: Optional[str],
+    image_path: Path,
     database_id: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Create a Notion page. image_url is optional. Returns (page_id, page_url)."""
+    """Upload image and create a Notion page. Returns (page_id, page_url)."""
     service = NotionService()
 
     if database_id is None:
@@ -163,6 +184,7 @@ def save_payment(
     if not database_id:
         raise ValueError("No Notion database ID configured or found.")
 
+    image_url = upload_image_to_freeimage(image_path)
     page_id = service.create_payment_page(database_id, payment, image_url)
     page_url = f"https://notion.so/{page_id.replace('-', '')}"
     return page_id, page_url

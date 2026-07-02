@@ -86,9 +86,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         photo = update.message.photo[-1]
         file = await photo.get_file()
         local_path = await _download_file(file)
-        image_url = _telegram_file_url(file)
 
-        await _process_image(update, status_message, local_path, image_url, caption)
+        await _process_image(update, status_message, local_path, caption)
     except Exception as exc:
         logger.exception("Error processing photo")
         await status_message.edit_text(f"❌ Error procesando la imagen: {exc}")
@@ -110,9 +109,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         file = await document.get_file()
         local_path = await _download_file(file)
-        image_url = _telegram_file_url(file)
 
-        await _process_image(update, status_message, local_path, image_url, caption)
+        await _process_image(update, status_message, local_path, caption)
     except Exception as exc:
         logger.exception("Error processing document")
         await status_message.edit_text(f"❌ Error procesando el documento: {exc}")
@@ -129,18 +127,10 @@ async def _download_file(file) -> Path:
     return Path(tmp_path)
 
 
-def _telegram_file_url(file) -> Optional[str]:
-    """Build the public Telegram file URL from a File object."""
-    if not file or not file.file_path:
-        return None
-    return f"https://api.telegram.org/file/bot{Config.TELEGRAM_BOT_TOKEN}/{file.file_path}"
-
-
 async def _process_image(
     update: Update,
     status_message,
     image_path: Path,
-    image_url: Optional[str],
     caption: Optional[str] = None,
 ) -> None:
     """Run Kimi extraction + Notion save, then reply to the user."""
@@ -169,7 +159,7 @@ async def _process_image(
         f"Guardando en Notion..."
     )
 
-    page_id, page_url = save_payment(payment, image_url)
+    page_id, page_url = save_payment(payment, image_path)
 
     final_message = (
         f"✅ Pago guardado en Notion\n\n"
