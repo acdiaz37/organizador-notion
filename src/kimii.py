@@ -12,13 +12,17 @@ from src.models import PaymentData
 
 logger = logging.getLogger(__name__)
 
-PROMPT_TEMPLATE = """Analiza la captura de pantalla de un pago y devuelve **únicamente** un objeto JSON válido, sin texto extra, sin markdown, sin explicaciones.
+BASE_PROMPT = """Eres un asistente especializado en extraer datos de comprobantes de pago de imágenes.
 
-{context_block}
+Tu tarea es analizar la imagen y devolver **únicamente** un objeto JSON válido. No escribas nada más: ni markdown, ni explicaciones, ni saludos.
 
-Estructura exacta (valores desconocidos = null):
-{{
-  "nombre": "descripción corta",
+Si la imagen NO es un comprobante de pago, una factura, una transacción bancaria o algo relacionado con un pago, devuelve exactamente:
+{"es_pago": false, "nombre": "No es un pago", "monto": 0}
+
+Si la imagen SÍ es un comprobante de pago, devuelve este JSON exacto (rellena lo que veas, usa null para lo desconocido):
+{
+  "es_pago": true,
+  "nombre": "descripción corta del pago",
   "monto": 45000,
   "fecha": "2026-07-01",
   "comercio": "comercio o destinatario",
@@ -26,15 +30,19 @@ Estructura exacta (valores desconocidos = null):
   "referencia": "número de referencia",
   "estado": "Exitoso, Pendiente, Rechazado o Desconocido",
   "notas": "detalles breves"
-}}
+}
 
-Reglas:
-- "monto": número limpio, sin símbolos ni puntos de miles. Si ves $27.616,83 escribe 27616.83.
-- "fecha": ISO 8601 (YYYY-MM-DD). Sin año visible: usa 2026.
-- "estado": default "Exitoso" si es un comprobante.
-- Sé breve en "nombre" y "notas"."""
+Reglas importantes:
+- "monto" debe ser un número, sin símbolos de moneda ni puntos de miles. Ejemplo: si ves $27.616,83 escribe 27616.83.
+- "fecha" debe estar en formato ISO 8601 (YYYY-MM-DD). Si no hay año visible, usa 2026.
+- "estado": si no aparece, usa "Exitoso" si es un comprobante de pago.
+- "categoria": elige la más cercana. Si no estás seguro, usa "Otros".
+- Sé breve en "nombre" y "notas".
+"""
 
-CONTEXT_PREFIX = "El usuario envió este mensaje de contexto junto con la imagen. Úsalo para completar o corregir la información del pago:\n"""
+CONTEXT_INSTRUCTION = """
+El usuario envió este mensaje de contexto junto con la imagen. Úsalo para completar o corregir la información del pago, pero nunca inventes datos que no estén en la imagen o en el mensaje:
+"""
 
 
 class KimiExtractor:
@@ -63,17 +71,17 @@ class KimiExtractor:
         }
         return mapping.get(suffix, "image/jpeg")
 
+    def _build_prompt(self, context: Optional[str]) -> str:
+        prompt = BASE_PROMPT
+        if context and context.strip():
+            prompt += "\n" + CONTEXT_INSTRUCTION + context.strip()
+        return prompt
+
     def extract(self, image_path: Path, context: Optional[str] = None) -> PaymentData:
         """Extract payment data from an image file."""
         logger.info("Extracting data from image: %s", image_path)
 
-        if context:
-            context_block = CONTEXT_PREFIX + context
-        else:
-            context_block = "No hay contexto adicional. Extrae todo solo de la imagen."
-
-        prompt = PROMPT_TEMPLATE.format(context_block=context_block)
-
+        prompt = self._build_prompt(context)
         image_base64 = self._encode_image(image_path)
         mime_type = self._detect_mime_type(image_path)
 
@@ -108,7 +116,12 @@ class KimiExtractor:
 
         data = self._parse_json(cleaned)
 
-        # Normalize keys: replace spaces or missing keys.
+        # If Kimi returns an empty object, treat it as "not a payment".
+        if not data:
+            data = {"es_pago": False, "nombre": "No es un pago", "monto": 0}
+
+        # Normalize defaults.
+        data.setdefault("es_pago", True)
         data.setdefault("nombre", "Pago registrado")
         data.setdefault("monto", 0)
 
@@ -182,10 +195,10 @@ class KimiExtractor:
         return response.choices[0].message.content or ""
 
 
-def extract_payment(image_path: str | Path) -> PaymentData:
+def extract_payment(image_path: str | Path, context: Optional[str] = None) -> PaymentData:
     """Convenience function to extract payment data from an image path."""
     extractor = KimiExtractor()
-    return extractor.extract(Path(image_path))
+    return extractor.extract(Path(image_path), context=context)
 
 
 def test_kimi_connection() -> str:

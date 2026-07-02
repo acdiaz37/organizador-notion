@@ -79,7 +79,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     status_message = await update.message.reply_text(PROCESSING_MESSAGE)
-    caption = update.message.caption or update.message.text or None
+    caption = update.message.caption
 
     try:
         # Get largest available photo.
@@ -136,6 +136,16 @@ async def _process_image(
     """Run Kimi extraction + Notion save, then reply to the user."""
     extractor = KimiExtractor()
     payment = extractor.extract(image_path, context=caption)
+
+    # Validate that the image actually contains a payment.
+    if not payment.es_pago or payment.monto <= 0:
+        logger.warning("Rejected image: not a payment or monto is zero")
+        await status_message.edit_text(
+            "⚠️ No detecté un comprobante de pago válido en esta imagen.\n\n"
+            "Si sí es un pago, intenta enviarla de nuevo con una descripción clara, "
+            "por ejemplo: 'pago de tarjeta de crédito en Rappi'."
+        )
+        return
 
     context_hint = f"📝 Contexto usado: {caption}\n" if caption else ""
 

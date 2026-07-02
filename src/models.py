@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class PaymentData(BaseModel):
     """Structured payment data extracted from a screenshot."""
 
+    es_pago: bool = Field(default=True, description="Whether the image actually contains a payment")
     nombre: str = Field(description="Short description of the payment")
     monto: float = Field(description="Payment amount as a number")
     fecha: Optional[date] = Field(default=None, description="Payment date in YYYY-MM-DD format")
